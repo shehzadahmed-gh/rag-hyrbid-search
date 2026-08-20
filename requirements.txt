@@ -1,0 +1,25 @@
+# --- web framework ---
+fastapi==0.141.1
+uvicorn[standard]==0.52.4
+pydantic==2.13.4
+pydantic-settings==2.15.0
+python-dotenv==1.2.2
+httpx==0.28.1
+
+# --- retrieval ---
+rank-bm25==0.2.2
+scikit-learn==1.8.0
+numpy==2.4.4
+
+# --- vector stores ---
+qdrant-client==1.19.0
+chromadb==1.5.9
+
+# --- model backends (optional at runtime - only imported when selected via .env) ---
+openai==3.3.1
+anthropic==0.125.0
+# sentence-transformers==3.*       # uncomment for RERANKER_BACKEND=cross_encoder (needs network + ~1-2GB of deps)
+
+# --- tests ---
+pytest==9.1.1
+pytest-asyncio==1.4.0
