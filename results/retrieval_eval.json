@@ -1,0 +1,37 @@
+{
+  "dataset": "cranfield",
+  "embedding_backend": "local",
+  "reranker_backend": "local",
+  "rrf_k": 60,
+  "candidates_per_retriever": 20,
+  "results": {
+    "BM25 only": {
+      "recall@10": 0.3488,
+      "mrr@10": 0.4756,
+      "ndcg@10": 0.3334,
+      "median_ms": 9.13,
+      "queries": 225
+    },
+    "Dense only": {
+      "recall@10": 0.1535,
+      "mrr@10": 0.2828,
+      "ndcg@10": 0.1566,
+      "median_ms": 2.44,
+      "queries": 225
+    },
+    "Hybrid (RRF)": {
+      "recall@10": 0.2894,
+      "mrr@10": 0.43,
+      "ndcg@10": 0.2758,
+      "median_ms": 12.82,
+      "queries": 225
+    },
+    "Hybrid + rerank": {
+      "recall@10": 0.3425,
+      "mrr@10": 0.4828,
+      "ndcg@10": 0.3319,
+      "median_ms": 16.27,
+      "queries": 225
+    }
+  }
+}
