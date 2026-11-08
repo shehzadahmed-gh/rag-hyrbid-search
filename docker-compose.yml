@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   app:
     build: .
@@ -22,8 +20,7 @@ services:
       - chroma
     restart: unless-stopped
 
-  # Real Qdrant server (default VECTOR_BACKEND). Swap to VECTOR_BACKEND=chroma
-  # to use the chroma service below instead - both are always available.
+  # Qdrant is the default backend; set VECTOR_BACKEND=chroma to use Chroma instead.
   qdrant:
     image: qdrant/qdrant:latest
     ports:

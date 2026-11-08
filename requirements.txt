@@ -15,10 +15,11 @@ numpy==2.4.4
 qdrant-client==1.19.0
 chromadb==1.5.9
 
-# --- model backends (optional at runtime - only imported when selected via .env) ---
+# --- model backends (imported only when selected in .env) ---
 openai==3.3.1
 anthropic==0.125.0
-# sentence-transformers==3.*       # uncomment for RERANKER_BACKEND=cross_encoder (needs network + ~1-2GB of deps)
+# For RERANKER_BACKEND=cross_encoder or CITATION_CHECKER=nli (pulls in PyTorch):
+# sentence-transformers
 
 # --- tests ---
 pytest==9.1.1
