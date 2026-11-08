@@ -7,10 +7,11 @@ Three-stage hybrid search:
                           sets, then a reranker re-scores the fused
                           candidates for the final top-k
 
-Dense and BM25 catch different failure modes (semantic paraphrase vs. exact
-keyword/acronym/ID matches); fusing them before reranking gives the
-reranker a broader, higher-recall candidate pool than either stage alone.
+Dense retrieval is good at paraphrases, BM25 at exact keywords, acronyms and
+IDs. Fusing the two candidate lists gives the reranker a wider pool than
+either one alone. scripts/evaluate_retrieval.py measures each stage.
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -44,21 +45,27 @@ class HybridSearchService:
         embedder: EmbeddingProvider,
         reranker: Reranker,
         rrf_k: int = 60,
+        dense_k: int = 20,
+        bm25_k: int = 20,
     ):
         self._corpus = corpus
         self._vector_store = vector_store
         self._embedder = embedder
         self._reranker = reranker
         self._rrf_k = rrf_k
+        self._dense_k = dense_k
+        self._bm25_k = bm25_k
 
     def search(
         self,
         query: str,
         top_k: int = 5,
-        dense_k: int = 20,
-        bm25_k: int = 20,
+        dense_k: int | None = None,
+        bm25_k: int | None = None,
         rerank: bool = True,
     ) -> tuple[list[HybridSearchResult], dict[str, Any]]:
+        dense_k = dense_k or self._dense_k
+        bm25_k = bm25_k or self._bm25_k
         # --- stage 1: dense ---
         query_vector = self._embedder.embed_one(query)
         dense_hits = self._vector_store.search(query_vector, top_k=dense_k)
@@ -81,9 +88,7 @@ class HybridSearchService:
         # --- stage 3: rerank ---
         rerank_scores: dict[str, float] = {}
         if rerank and candidate_chunks:
-            reranked = self._reranker.rerank(
-                query, [(c.chunk_id, c.text) for c in candidate_chunks], top_k=top_k
-            )
+            reranked = self._reranker.rerank(query, [(c.chunk_id, c.text) for c in candidate_chunks], top_k=top_k)
             final_order = [r.chunk_id for r in reranked]
             rerank_scores = {r.chunk_id: r.score for r in reranked}
         else:

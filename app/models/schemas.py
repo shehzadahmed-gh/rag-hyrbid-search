@@ -34,8 +34,8 @@ class DocumentSummary(BaseModel):
 class SearchRequest(BaseModel):
     query: str = Field(..., min_length=1)
     top_k: int = Field(5, ge=1, le=50)
-    dense_k: int = Field(20, ge=1, le=200)
-    bm25_k: int = Field(20, ge=1, le=200)
+    dense_k: int | None = Field(None, ge=1, le=200, description="Defaults to DENSE_TOP_K.")
+    bm25_k: int | None = Field(None, ge=1, le=200, description="Defaults to BM25_TOP_K.")
     rerank: bool = True
 
 
