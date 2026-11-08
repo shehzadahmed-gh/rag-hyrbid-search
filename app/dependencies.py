@@ -1,10 +1,8 @@
+"""Builds each service once per process from Settings and hands them to the
+routers as FastAPI dependencies. Routers only see the interfaces, so swapping
+a backend is a .env change.
 """
-Composition root: builds each service once at process startup (guided by
-Settings) and exposes them to routers as FastAPI dependencies. Centralising
-wiring here means a router never imports a concrete backend (Qdrant vs
-Chroma, OpenAI vs local) directly - it only depends on the abstract service
-interfaces, which is what makes the backends swappable via .env alone.
-"""
+
 from __future__ import annotations
 
 from functools import lru_cache
@@ -17,6 +15,7 @@ from app.services.hybrid_search import HybridSearchService
 from app.services.ingestion_service import IngestionService
 from app.services.llm_provider import build_llm_provider
 from app.services.reranker import build_reranker
+from app.services.support_checkers import SupportChecker, build_support_checker
 from app.services.vector_store import VectorStore, build_vector_store
 
 
@@ -40,6 +39,8 @@ def get_hybrid_search_service() -> HybridSearchService:
         embedder=build_embedding_provider(settings),
         reranker=build_reranker(settings),
         rrf_k=settings.rrf_k,
+        dense_k=settings.dense_top_k,
+        bm25_k=settings.bm25_top_k,
     )
 
 
@@ -56,11 +57,18 @@ def get_ingestion_service() -> IngestionService:
 
 
 @lru_cache
+def get_support_checker() -> SupportChecker:
+    settings = get_settings()
+    return build_support_checker(settings, llm_factory=lambda: build_llm_provider(settings))
+
+
+@lru_cache
 def get_generation_service() -> GenerationService:
     settings = get_settings()
     return GenerationService(
         search_service=get_hybrid_search_service(),
-        citation_support_threshold=settings.citation_support_threshold,
+        support_checker=get_support_checker(),
+        support_threshold=settings.citation_support_threshold,
     )
 
 

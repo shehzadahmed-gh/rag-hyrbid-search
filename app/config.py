@@ -1,17 +1,10 @@
+"""Service configuration, read from environment variables or a .env file.
+
+The defaults run fully offline: hashing embeddings, an on-disk Qdrant
+collection, the TF-IDF reranker, the extractive answer generator and the
+lexical citation checker. See .env.example for every option.
 """
-Central configuration for the RAG pipeline service.
 
-Every external dependency (vector store backend, embedding provider, LLM
-provider, reranker) is chosen here via environment variables so the exact
-same codebase can run:
-
-  * fully offline, with zero API keys and zero network access, for local
-    development, unit tests, and CI (the defaults below), or
-  * against real backends (a Qdrant/Chroma server via docker-compose, and
-    GPT-4o / Claude Sonnet) once the corresponding keys / URLs are set.
-
-See .env.example for the full list of variables.
-"""
 from __future__ import annotations
 
 from functools import lru_cache
@@ -40,9 +33,8 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
 
     # --- vector store ---
-    # "qdrant" or "chroma". Each supports either a real server (URL) or an
-    # embedded on-disk mode (LOCAL_PATH) that needs no server at all - handy
-    # for local dev/tests and for this take-home style build environment.
+    # "qdrant" or "chroma". Set *_URL to use a server, otherwise the
+    # embedded on-disk mode at *_LOCAL_PATH is used.
     vector_backend: Literal["qdrant", "chroma"] = "qdrant"
     collection_name: str = "documents"
 
@@ -56,11 +48,10 @@ class Settings(BaseSettings):
     # --- BM25 / corpus persistence ---
     corpus_path: str = "./data/corpus.jsonl"
 
-    # --- hybrid search ---
+    # --- hybrid search: candidates taken from each retriever before fusion ---
     dense_top_k: int = 20
     bm25_top_k: int = 20
     rrf_k: int = 60
-    rerank_top_k: int = 5
 
     # --- reranking ---
     # "local" -> offline TF-IDF/cosine lexical reranker (no network, no key)
@@ -76,12 +67,16 @@ class Settings(BaseSettings):
     default_llm_provider: Literal["local", "openai", "anthropic"] = "local"
     openai_chat_model: str = "gpt-4o"
     anthropic_api_key: str | None = None
-    # Update as newer Claude Sonnet snapshots ship - see docs.claude.com/en/docs/about-claude/models
     anthropic_chat_model: str = "claude-sonnet-5"
     generation_max_tokens: int = 800
 
     # --- citation validation ---
-    citation_support_threshold: float = 0.15
+    # "lexical" (default, offline), "nli" (cross-encoder entailment model,
+    # needs sentence-transformers) or "llm" (uses DEFAULT_LLM_PROVIDER).
+    citation_checker: Literal["lexical", "nli", "llm"] = "lexical"
+    nli_model: str = "cross-encoder/nli-deberta-v3-small"
+    # Leave unset to use the checker's own default (lexical 0.15, nli/llm 0.5).
+    citation_support_threshold: float | None = None
 
 
 @lru_cache

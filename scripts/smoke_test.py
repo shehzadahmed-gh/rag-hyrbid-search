@@ -1,12 +1,12 @@
-"""
-End-to-end smoke test against a running instance of the service
-(`uvicorn app.main:app`). Exercises all four modular services in order:
-ingestion -> retrieval -> generation -> citation validation.
+"""End-to-end check against a running service: ingest three documents, run
+hybrid search, generate cited answers, validate a bad answer, delete a
+document.
 
 Usage:
     uvicorn app.main:app --port 8000 &
     python scripts/smoke_test.py --base-url http://localhost:8000
 """
+
 from __future__ import annotations
 
 import argparse
@@ -24,8 +24,8 @@ DOCS = [
             "computer systems. The department is based at the Lower Mountjoy site and shares facilities with "
             "the Department of Engineering. Formal methods, including propositional and predicate logic, SAT "
             "solving, and first-order resolution, are introduced in the first year as a foundation for later "
-            "modules on algorithms and complexity. Students can join societies such as DUFIS, the Durham "
-            "University Finance and Investment Society, alongside their degree."
+            "modules on algorithms and complexity. Students can join societies such as DUFS, the Durham "
+            "University Finance Society, alongside their degree."
         ),
         "metadata": {"category": "university"},
     },
@@ -134,21 +134,36 @@ def main() -> int:
             failures += 1
         print()
 
-    print("== standalone citation validation (deliberately hallucinated citation) ==")
+    print("== citation validation on a deliberately bad answer ==")
     r = client.post("/retrieval/search", json={"query": QUESTIONS[0], "top_k": 2})
     sources = [
-        {"id": i + 1, **{k: v for k, v in res.items() if k in ("chunk_id", "document_id", "source", "chunk_index", "text")}}
+        {
+            "id": i + 1,
+            **{k: v for k, v in res.items() if k in ("chunk_id", "document_id", "source", "chunk_index", "text")},
+        }
         for i, res in enumerate(r.json()["results"])
     ]
-    bad_answer = "Durham CS students spend their first year exclusively on watercolour painting [1] and also learn SAT solving [7]."
+    # [7] doesn't exist, and the [1] claim is invented but reuses words from source 1.
+    bad_answer = (
+        "Durham CS students spend their first year exclusively on watercolour painting [1] "
+        "and also learn SAT solving [7]."
+    )
     r = client.post("/citations/validate", json={"answer": bad_answer, "sources": sources})
     report = r.json()
     print(json.dumps(report, indent=2))
-    if report["valid"]:
-        print("    !! expected this deliberately bad answer to be flagged invalid")
-        failures += 1
+    if any("[7]" in issue for issue in report["issues"]):
+        print("  out-of-range citation [7] flagged")
     else:
-        print("  correctly flagged as invalid:", report["issues"])
+        print("    !! expected the invented citation [7] to be flagged")
+        failures += 1
+    first = next((c for c in report["per_citation"] if c["citation"] == 1), None)
+    if first and first["supported"]:
+        print(
+            f"  NOTE: the made-up [1] claim passed (score {first['support_score']}). The default lexical "
+            "checker can't catch this kind of fabrication; set CITATION_CHECKER=nli or llm."
+        )
+    elif first:
+        print("  made-up [1] claim flagged as unsupported")
 
     print("\n== document deletion ==")
     if document_ids:

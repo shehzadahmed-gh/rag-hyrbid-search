@@ -1,55 +1,29 @@
+"""Checks a generated answer's [n] citations against the sources it was given.
+
+Two separate checks:
+
+1. Every [n] must refer to a source that was actually retrieved. A number
+   outside that range is an invented citation.
+2. Each cited claim must be supported by the source it cites. The answer is
+   split into sentences, and each sentence into claims: the text before a
+   marker (or a run of markers like [1][2]) is the claim for those sources.
+   "A is true [1] and B is true [2]." is checked as "A is true" against
+   source 1 and "and B is true" against source 2.
+
+How "supported" is judged depends on the SupportChecker (see
+support_checkers.py).
 """
-Citation validation - the fourth modular service.
 
-Checks two independent things about a generated answer against the numbered
-source chunks it was supposed to be grounded in:
-
-  1. Range validity   - every [n] marker in the answer must refer to a
-                         source that was actually retrieved (catches the
-                         model inventing a citation number that doesn't
-                         exist).
-  2. Lexical support   - for each cited sentence, does the cited source
-                         actually contain overlapping content? A citation
-                         to a real source that doesn't support the specific
-                         claim is still a grounding failure.
-
-Support is measured with token-set Jaccard overlap between the cited
-sentence and its source chunk. This is intentionally simple and has no
-external dependency - it is a heuristic screen for obviously-unsupported
-citations, not a semantic entailment model. A production system would layer
-an NLI/entailment model or an LLM-as-judge check on top for a stricter
-signal; the interface here (`validate_citations`) is where that would slot
-in.
-"""
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
 
 from app.services.chunking import split_sentences
+from app.services.support_checkers import LexicalSupportChecker, SupportChecker
 
-_CITATION_PATTERN = re.compile(r"\[(\d+)\]")
-_STOPWORDS = {
-    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "to", "of", "in", "on",
-    "for", "and", "or", "but", "with", "as", "by", "at", "from", "that", "this", "it", "its",
-}
-
-
-def _tokens(text: str) -> set[str]:
-    words = re.findall(r"[A-Za-z0-9]+", text.lower())
-    return {w for w in words if w not in _STOPWORDS}
-
-
-def _strip_citations(text: str) -> str:
-    return _CITATION_PATTERN.sub("", text)
-
-
-def _support_score(sentence: str, source_text: str) -> float:
-    sent_tokens = _tokens(_strip_citations(sentence))
-    source_tokens = _tokens(source_text)
-    if not sent_tokens or not source_tokens:
-        return 0.0
-    return len(sent_tokens & source_tokens) / len(sent_tokens)
+_CITATION = re.compile(r"\[(\d+)\]")
+_CITATION_RUN = re.compile(r"(?:\[\d+\][\s,;]*)+")
 
 
 @dataclass
@@ -61,53 +35,62 @@ class CitationReport:
     per_citation: list[dict] = field(default_factory=list)
 
 
-def validate_citations(answer: str, sources: list, support_threshold: float = 0.15) -> CitationReport:
-    """
-    `sources` is a list of objects with `.id` (1-indexed, matching the [n]
-    markers) and `.text` (the source chunk content).
-    """
-    valid_ids = {s.id for s in sources}
+def split_claims(sentence: str) -> list[tuple[str, list[int]]]:
+    """[(claim_text, [source ids]), ...] for one sentence, in order."""
+    claims: list[tuple[str, list[int]]] = []
+    position = 0
+    for run in _CITATION_RUN.finditer(sentence):
+        text = sentence[position : run.start()].strip(" ,;")
+        ids = [int(n) for n in _CITATION.findall(run.group())]
+        claims.append((text, ids))
+        position = run.end()
+    return claims
+
+
+def validate_citations(
+    answer: str,
+    sources: list,
+    checker: SupportChecker | None = None,
+    support_threshold: float | None = None,
+) -> CitationReport:
+    """`sources` are objects with `.id` (1-indexed, matching [n]) and `.text`."""
+    checker = checker or LexicalSupportChecker()
+    threshold = checker.default_threshold if support_threshold is None else support_threshold
     source_by_id = {s.id: s for s in sources}
 
-    cited_numbers = sorted({int(n) for n in _CITATION_PATTERN.findall(answer)})
+    cited_numbers = sorted({int(n) for n in _CITATION.findall(answer)})
     issues: list[str] = []
 
-    out_of_range = [n for n in cited_numbers if n not in valid_ids]
+    out_of_range = [n for n in cited_numbers if n not in source_by_id]
     if out_of_range:
         issues.append(
             f"Citation marker(s) {out_of_range} do not match any retrieved source "
             f"(valid range is 1-{len(sources)}); this looks like a hallucinated citation."
         )
-
     if not cited_numbers:
-        issues.append("The answer contains no [n] citation markers - none of its claims are traceably grounded.")
+        issues.append("The answer contains no [n] citation markers, so none of its claims can be traced to a source.")
 
-    per_citation: list[dict] = []
+    to_score: list[tuple[str, int]] = []
     for sentence in split_sentences(answer):
-        for n in {int(x) for x in _CITATION_PATTERN.findall(sentence)}:
-            if n not in valid_ids:
-                continue
-            source = source_by_id[n]
-            score = _support_score(sentence, source.text)
-            supported = score >= support_threshold
-            per_citation.append(
-                {
-                    "citation": n,
-                    "sentence": sentence,
-                    "support_score": round(score, 3),
-                    "supported": supported,
-                }
+        for claim, ids in split_claims(sentence):
+            for n in dict.fromkeys(ids):  # de-duplicate, keep order
+                if n in source_by_id:
+                    to_score.append((claim, n))
+
+    scores = checker.score_many([(claim, source_by_id[n].text) for claim, n in to_score])
+    per_citation: list[dict] = []
+    for (claim, n), score in zip(to_score, scores, strict=True):
+        supported = score >= threshold
+        per_citation.append({"citation": n, "claim": claim, "support_score": round(score, 3), "supported": supported})
+        if not supported:
+            issues.append(
+                f"Citation [{n}] scored {score:.2f} with the {checker.name} checker (threshold {threshold}); "
+                f"source [{n}] may not support: {claim!r}"
             )
-            if not supported:
-                issues.append(
-                    f"Citation [{n}] has low lexical overlap ({score:.2f}) with source [{n}]; "
-                    "the claim may not actually be supported by that excerpt."
-                )
 
-    coverage = len(set(cited_numbers) & valid_ids) / len(sources) if sources else 0.0
-
+    coverage = len(set(cited_numbers) & source_by_id.keys()) / len(sources) if sources else 0.0
     return CitationReport(
-        valid=len(issues) == 0,
+        valid=not issues,
         cited_sources=cited_numbers,
         coverage=round(coverage, 3),
         issues=issues,
