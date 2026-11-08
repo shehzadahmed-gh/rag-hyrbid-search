@@ -53,3 +53,42 @@ def test_search_on_empty_corpus_returns_empty():
     with tempfile.TemporaryDirectory() as tmp:
         store = CorpusStore(os.path.join(tmp, "corpus.jsonl"))
         assert store.search("anything", top_k=5) == []
+
+
+def test_index_is_rebuilt_once_after_many_adds(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        store = CorpusStore(os.path.join(tmp, "corpus.jsonl"))
+        rebuilds = []
+        original = store._rebuild_index
+        monkeypatch.setattr(store, "_rebuild_index", lambda: (rebuilds.append(1), original())[1])
+        for i in range(50):
+            store.add_chunks([_chunk(f"c{i}", f"doc{i}", f"document number {i} about topic {i % 5}")])
+        assert rebuilds == []
+        assert store.search("topic", top_k=3)
+        assert store.search("number", top_k=3)
+        assert len(rebuilds) == 1
+
+
+def test_delete_rewrites_file_atomically(monkeypatch):
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "corpus.jsonl")
+        store = CorpusStore(path)
+        store.add_chunks([_chunk("a", "doc1", "alpha"), _chunk("b", "doc2", "beta")])
+        before = open(path).read()
+
+        def crash(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(os, "replace", crash)
+        try:
+            store.delete_document("doc1")
+        except OSError:
+            pass
+        # The original file is untouched and memory still matches it.
+        assert open(path).read() == before
+        assert store.get("a") is not None
+        monkeypatch.undo()
+
+        store.delete_document("doc1")
+        assert CorpusStore(path).get("a") is None
+        assert CorpusStore(path).get("b") is not None
