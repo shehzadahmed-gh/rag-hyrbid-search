@@ -1,19 +1,13 @@
-"""
-Pluggable dense-embedding providers.
+"""Dense embedding providers.
 
-`LocalHashingEmbeddingProvider` is the default. It uses scikit-learn's
-feature-hashing trick to turn text into a fixed-dimensional, L2-normalized
-dense vector with **no model download and no network call** - which is what
-makes the rest of this service runnable end-to-end in an offline / CI / take
--home environment. It is a real, well-defined algorithm (not a fake), but it
-has no learned semantics: it behaves like a smarter bag-of-words, not like a
-trained embedding model.
-
-For real semantic recall, switch EMBEDDING_BACKEND=openai (needs
-OPENAI_API_KEY) or plug in a `sentence-transformers` model the same way -
-`VectorStore` and `HybridSearchService` only depend on the `EmbeddingProvider`
-interface, so nothing else in the pipeline needs to change.
+LocalHashingEmbeddingProvider is the default. It hashes word unigrams and
+bigrams into a fixed-size, L2-normalised vector with scikit-learn's
+HashingVectorizer, so it needs no model download or network. It has no
+learned meaning, so it behaves like a bag of words, and the retrieval
+evaluation shows it adds little on top of BM25. Set EMBEDDING_BACKEND=openai
+for real semantic embeddings; nothing else changes.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -39,8 +33,8 @@ class LocalHashingEmbeddingProvider(EmbeddingProvider):
 
     def __init__(self, dimension: int = 384):
         self.dimension = dimension
-        # alternate_sign=True approximates a random projection, which keeps
-        # dot products/cosine similarity meaningful despite hash collisions.
+        # alternate_sign=True makes hash collisions cancel out on average
+        # instead of always adding up.
         self._vectorizer = HashingVectorizer(
             n_features=dimension,
             norm="l2",
@@ -60,7 +54,7 @@ class OpenAIEmbeddingProvider(EmbeddingProvider):
     name = "openai"
 
     def __init__(self, api_key: str, model: str = "text-embedding-3-small", dimension: int = 1536):
-        from openai import OpenAI  # local import: keeps `openai` an optional dependency
+        from openai import OpenAI
 
         self._client = OpenAI(api_key=api_key)
         self._model = model

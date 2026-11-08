@@ -1,4 +1,5 @@
 """Reciprocal Rank Fusion (Cormack, Clarke & Buettcher, 2009)."""
+
 from __future__ import annotations
 
 

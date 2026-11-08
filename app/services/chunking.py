@@ -1,15 +1,11 @@
-"""
-Document chunking.
+"""Word-window chunking with overlap.
 
-Uses a word-count sliding window with overlap rather than a token-accurate
-splitter (e.g. tiktoken) so the service has zero external/network dependency
-at chunk time - tiktoken's BPE files are fetched from a remote blob store on
-first use, which is not guaranteed in every deployment environment (locked
-down networks, air-gapped CI, etc.). If you want token-exact chunking for a
-specific model, swap `_split_words` below for a tiktoken-based splitter; the
-rest of the pipeline (embeddings, BM25, storage) is agnostic to how chunks
-were produced.
+Chunks are counted in words rather than model tokens, so chunking needs no
+tokenizer download. For token-exact chunk sizes, replace the word split in
+chunk_text with a tokenizer; the rest of the pipeline doesn't depend on how
+chunks were made.
 """
+
 from __future__ import annotations
 
 import re
@@ -39,14 +35,9 @@ def split_sentences(text: str) -> list[str]:
 
 
 def chunk_text(text: str, chunk_size_words: int = 220, overlap_words: int = 40) -> list[ChunkSpan]:
-    """
-    Split `text` into overlapping chunks of ~`chunk_size_words` words.
-
-    A sliding window over words (rather than raw characters) keeps chunks
-    readable and roughly comparable in length, while overlap preserves
-    context that would otherwise be severed at a chunk boundary - important
-    for both BM25 (whole-term matches) and embedding quality.
-    """
+    """Split `text` into chunks of `chunk_size_words` words, each sharing
+    `overlap_words` words with the previous one so a sentence cut at a
+    boundary still appears whole in one of the two chunks."""
     if chunk_size_words <= 0:
         raise ValueError("chunk_size_words must be positive")
     if overlap_words < 0 or overlap_words >= chunk_size_words:

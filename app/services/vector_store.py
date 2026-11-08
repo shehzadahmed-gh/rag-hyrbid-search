@@ -1,16 +1,8 @@
+"""Dense vector storage with two interchangeable backends, Qdrant and
+ChromaDB (VECTOR_BACKEND). Each can talk to a server (*_URL, as in
+docker-compose) or run embedded on disk (*_LOCAL_PATH) with no server.
 """
-Dense-vector storage abstraction, with two interchangeable backends: Qdrant
-and ChromaDB (matching the "multiple storage backends" requirement). Both
-implementations support two connection modes:
 
-  * server mode  - point at a real Qdrant/Chroma server (docker-compose
-                    brings one up; see docker-compose.yml), via *_URL
-  * local mode   - an embedded, on-disk engine with no server process, via
-                    *_LOCAL_PATH. Handy for local dev, tests, and any
-                    environment (like this build sandbox) without Docker.
-
-Select the backend with VECTOR_BACKEND=qdrant|chroma in .env.
-"""
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -63,18 +55,16 @@ class QdrantVectorStore(VectorStore):
     def upsert(self, ids: list[str], vectors: list[list[float]], payloads: list[dict]) -> None:
         from qdrant_client.models import PointStruct
 
-        # Qdrant point IDs must be int or UUID - we keep our own string chunk_id
-        # inside the payload and let Qdrant assign/accept a UUID-safe id.
+        # Qdrant point IDs must be ints or UUIDs, so the string chunk_id is
+        # mapped to a UUID and also kept in the payload.
         points = [
             PointStruct(id=_to_qdrant_id(cid), vector=vec, payload={**payload, "chunk_id": cid})
-            for cid, vec, payload in zip(ids, vectors, payloads)
+            for cid, vec, payload in zip(ids, vectors, payloads, strict=True)
         ]
         self._client.upsert(collection_name=self._collection, points=points)
 
     def search(self, query_vector: list[float], top_k: int) -> list[VectorSearchResult]:
-        results = self._client.query_points(
-            collection_name=self._collection, query=query_vector, limit=top_k
-        )
+        results = self._client.query_points(collection_name=self._collection, query=query_vector, limit=top_k)
         return [VectorSearchResult(chunk_id=p.payload["chunk_id"], score=float(p.score)) for p in results.points]
 
     def delete(self, ids: list[str]) -> None:
@@ -96,9 +86,8 @@ class ChromaVectorStore(VectorStore):
         else:
             self._client = chromadb.PersistentClient(path=local_path or "./data/chroma_local")
 
-        # We always pass our own embeddings explicitly (see upsert/search below),
-        # so no embedding function - and therefore no implicit model download -
-        # is ever needed here.
+        # Embeddings are always passed in, so Chroma never needs to download
+        # its default embedding model.
         self._collection = self._client.get_or_create_collection(collection_name)
 
     def upsert(self, ids: list[str], vectors: list[list[float]], payloads: list[dict]) -> None:
@@ -109,9 +98,11 @@ class ChromaVectorStore(VectorStore):
         results = self._collection.query(query_embeddings=[query_vector], n_results=top_k)
         ids = results["ids"][0] if results["ids"] else []
         distances = results["distances"][0] if results["distances"] else []
-        # Chroma's default space is squared-L2 distance (lower = closer); convert
-        # to a similarity-style score so it sorts/reads the same way as Qdrant's.
-        return [VectorSearchResult(chunk_id=cid, score=1.0 / (1.0 + dist)) for cid, dist in zip(ids, distances)]
+        # Chroma returns squared-L2 distance (lower is closer). Convert it so
+        # higher is better, like Qdrant's cosine score.
+        return [
+            VectorSearchResult(chunk_id=cid, score=1.0 / (1.0 + dist)) for cid, dist in zip(ids, distances, strict=True)
+        ]
 
     def delete(self, ids: list[str]) -> None:
         self._collection.delete(ids=ids)
@@ -120,8 +111,7 @@ class ChromaVectorStore(VectorStore):
 def _to_qdrant_id(chunk_id: str) -> str:
     import uuid
 
-    # Deterministic UUID derived from our own chunk_id, so re-ingesting the
-    # same chunk_id upserts the same point instead of duplicating it.
+    # uuid5 is deterministic, so the same chunk_id always maps to the same point.
     return str(uuid.uuid5(uuid.NAMESPACE_URL, chunk_id))
 
 

@@ -1,16 +1,12 @@
-"""
-Pluggable generation backends (the "model backends" side of "Integrated
-multiple model and storage backends, including GPT-4o, Claude Sonnet,
-ChromaDB and Qdrant").
+"""Answer generators.
 
-Every provider implements `generate_grounded_answer(query, sources)`, which
-answers strictly from the supplied source chunks and cites them inline as
-`[1]`, `[2]`, ... matching each source's 1-indexed position. The default
-`LocalExtractiveProvider` needs no API key and does this deterministically
-via lexical overlap, so `/generation/answer` works out of the box; GPT-4o and
-Claude Sonnet are real, fully-implemented alternatives that activate as soon
-as the corresponding API key is set.
+Every provider implements `generate_grounded_answer(query, sources)`: answer
+only from the numbered source chunks and cite them inline as [1], [2], ...
+The OpenAI and Anthropic providers do this with a prompt.
+`LocalExtractiveProvider` needs no API key: it picks the source sentences
+with the most word overlap with the question and cites where each came from.
 """
+
 from __future__ import annotations
 
 import re
@@ -41,9 +37,7 @@ class LLMProvider(ABC):
         raise NotImplementedError
 
     def generate_grounded_answer(self, query: str, sources: list, max_tokens: int = 800) -> str:
-        """Default path used by every *real* LLM provider: build a citation
-        -instructed prompt and let the model do the reasoning. The offline
-        stub below overrides this instead of `generate()`."""
+        """Prompt the model with numbered sources and citation instructions."""
         user_prompt = build_context_prompt(query, sources)
         return self.generate(system=GROUNDED_SYSTEM_PROMPT, user=user_prompt, max_tokens=max_tokens)
 
@@ -51,7 +45,7 @@ class LLMProvider(ABC):
 class OpenAIProvider(LLMProvider):
     """GPT-4o via the OpenAI Chat Completions API."""
 
-    name = "openai-gpt-4o"
+    name = "openai"
 
     def __init__(self, api_key: str, model: str = "gpt-4o"):
         from openai import OpenAI  # optional dependency, imported lazily
@@ -71,9 +65,9 @@ class OpenAIProvider(LLMProvider):
 class AnthropicProvider(LLMProvider):
     """Claude Sonnet via the Anthropic Messages API."""
 
-    name = "anthropic-claude-sonnet"
+    name = "anthropic"
 
-    def __init__(self, api_key: str, model: str = "claude-sonnet-5"):
+    def __init__(self, api_key: str, model: str):
         import anthropic  # optional dependency, imported lazily
 
         self._client = anthropic.Anthropic(api_key=api_key)
@@ -90,29 +84,56 @@ class AnthropicProvider(LLMProvider):
 
 
 class LocalExtractiveProvider(LLMProvider):
-    """
-    Deterministic, dependency-free stand-in generator. It does not reason
-    about the question the way GPT-4o/Claude do - it scores each source
-    sentence by token overlap with the query, keeps the best-matching
-    sentence(s) per relevant source, and stitches them together with
-    citation markers. This exists so the full ingestion -> retrieval ->
-    generation -> citation-validation pipeline is exercisable end-to-end
-    with zero API keys and zero network access; swap DEFAULT_LLM_PROVIDER to
-    "openai" or "anthropic" for real generative answers.
-    """
+    """Extractive answers with no model: for each source, the sentence with
+    the highest Jaccard overlap with the question, best four overall, each
+    cited. It copies source sentences verbatim, so its citations always pass
+    the lexical check; the validator is only really exercised by LLM answers."""
 
-    name = "local-extractive-stub"
+    name = "local-extractive"
     _STOPWORDS = {
-        "a", "an", "the", "is", "are", "was", "were", "be", "been", "being", "to", "of", "in", "on",
-        "for", "and", "or", "but", "with", "as", "by", "at", "from", "that", "this", "it", "its",
-        "what", "which", "who", "how", "why", "do", "does", "did", "can", "could", "should", "would",
+        "a",
+        "an",
+        "the",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "to",
+        "of",
+        "in",
+        "on",
+        "for",
+        "and",
+        "or",
+        "but",
+        "with",
+        "as",
+        "by",
+        "at",
+        "from",
+        "that",
+        "this",
+        "it",
+        "its",
+        "what",
+        "which",
+        "who",
+        "how",
+        "why",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
     }
 
     def generate(self, *, system: str, user: str, max_tokens: int = 1024) -> str:
-        # Not used directly - generate_grounded_answer() is overridden below -
-        # but implemented so LocalExtractiveProvider still satisfies the
-        # LLMProvider interface for any generic (non-RAG) use.
-        return "[local-extractive-stub] free-form generate() is not implemented; use generate_grounded_answer()."
+        return "[local-extractive] free-form generation is not supported; use generate_grounded_answer()."
 
     def _tokens(self, text: str) -> set[str]:
         words = re.findall(r"[A-Za-z0-9]+", text.lower())

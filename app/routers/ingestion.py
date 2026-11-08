@@ -20,7 +20,9 @@ def ingest_document(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    return IngestResponse(document_id=document_id, source=request.source, chunk_ids=chunk_ids, chunk_count=len(chunk_ids))
+    return IngestResponse(
+        document_id=document_id, source=request.source, chunk_ids=chunk_ids, chunk_count=len(chunk_ids)
+    )
 
 
 @router.get("/documents", response_model=list[DocumentSummary])

@@ -1,16 +1,11 @@
-"""
-Stage 3 of the hybrid pipeline: rerank the fused dense+BM25 candidate set.
+"""Final stage: rerank the fused candidates.
 
-`LocalLexicalReranker` (default) scores each candidate by TF-IDF cosine
-similarity to the query - a real, deterministic, offline re-scoring pass
-that lets the whole 3-stage pipeline run without a network call.
-
-`CrossEncoderReranker` wraps a `sentence-transformers` cross-encoder for
-production-quality semantic reranking. It downloads model weights from
-Hugging Face on first use, so it needs outbound network access; import is
-deferred so the dependency is optional until this backend is actually
-selected.
+LocalLexicalReranker scores each candidate by TF-IDF cosine similarity to the
+query, fitted on the candidate set only, and needs no download.
+CrossEncoderReranker uses a sentence-transformers cross-encoder, which reads
+the query and passage together; it downloads model weights on first use.
 """
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -50,7 +45,7 @@ class LocalLexicalReranker(Reranker):
         query_vec = doc_matrix[-1]
         doc_vecs = doc_matrix[:-1]
         sims = cosine_similarity(query_vec, doc_vecs)[0]
-        ranked = sorted(zip(ids, sims), key=lambda x: -x[1])
+        ranked = sorted(zip(ids, sims, strict=True), key=lambda x: -x[1])
         return [RerankedCandidate(chunk_id=cid, score=float(score)) for cid, score in ranked[:top_k]]
 
 
@@ -67,7 +62,7 @@ class CrossEncoderReranker(Reranker):
             return []
         pairs = [(query, text) for _, text in candidates]
         scores = self._model.predict(pairs)
-        ranked = sorted(zip((cid for cid, _ in candidates), scores), key=lambda x: -x[1])
+        ranked = sorted(zip((cid for cid, _ in candidates), scores, strict=True), key=lambda x: -x[1])
         return [RerankedCandidate(chunk_id=cid, score=float(score)) for cid, score in ranked[:top_k]]
 
 
