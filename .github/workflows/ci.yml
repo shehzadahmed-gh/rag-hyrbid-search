@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        vector_backend: [qdrant, chroma]
+    env:
+      VECTOR_BACKEND: ${{ matrix.vector_backend }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt ruff
+      - name: Lint
+        run: ruff check . && ruff format --check .
+      - name: Unit tests
+        run: pytest -q
+      - name: End-to-end smoke test
+        run: |
+          uvicorn app.main:app --port 8000 > api.log 2>&1 &
+          for i in $(seq 1 30); do curl -sf localhost:8000/health && break; sleep 1; done
+          python scripts/smoke_test.py --base-url http://localhost:8000
+      - name: API log on failure
+        if: failure()
+        run: tail -n 100 api.log
+
+  retrieval-eval:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Evaluate on Cranfield
+        run: python scripts/evaluate_retrieval.py --output eval-output.json
+      - name: Check the committed results are reproducible
+        run: |
+          python - <<'PY'
+          import json
+          committed = json.load(open("results/retrieval_eval.json"))["results"]
+          fresh = json.load(open("eval-output.json"))["results"]
+          for mode, metrics in committed.items():
+              for name in ("recall@10", "mrr@10", "ndcg@10"):
+                  assert abs(metrics[name] - fresh[mode][name]) < 0.005, (mode, name, metrics[name], fresh[mode][name])
+          print("results match results/retrieval_eval.json")
+          PY
